@@ -1,6 +1,7 @@
 import streamlit as st
 from models.user import OfficeWorker, Student
 from data_manager import SystemManager
+from services.recommendation_service import RecommendationService
 
 st.set_page_config(page_title="서울시 도서관 사각지대 시뮬레이터", layout="wide")
 
@@ -75,23 +76,20 @@ with tab3:
         avail_time = user.get_available_time()
         st.write(f"💡 {user_type} 객체 연산: {location_choice}에서 출발 시 도착 가능 시간은 **{avail_time}시**입니다.")
         
-        # 2. 객체 간 메시지 패싱으로 필터링
-        results = []
-        for lib in libraries:
-            dist = user.location.calculate_distance(lib.location)
-            
-            # 은닉화된 메서드 호출
-            if lib.is_open(avail_time) and lib.has_book(search_book):
-                # 객체 자체(lib)를 리스트에 담아줍니다.
-                results.append((lib, dist, lib.close_time))
-                
-        # 3. 거리순 정렬 후 출력
-        results.sort(key=lambda x: x[1])
+        # 2. 추천 서비스 호출 (비즈니스 로직 분리)
+        service = RecommendationService()
+        recommendation = service.recommend_libraries(user, libraries, search_book)
         
-        if results:
-            st.success(f"총 {len(results)}개의 도서관을 찾았습니다!")
+        total_count = recommendation["total_count"]
+        results = recommendation["top_results"]
+        
+        if total_count > 0:
+            st.success(f"총 {total_count}개의 도서관을 찾았습니다!")
             
-            for lib, dist, close_t in results[:5]: # 가장 가까운 5개만 추천
+            for item in results:
+                lib = item["library"]
+                dist = item["distance"]
+                close_t = item["close_time"]
                 # 도서관 객체 스스로 혼잡도를 계산하도록 메시지 전달
                 congestion = lib.get_congestion_rate(avail_time)
                 current_users = int(lib.max_seats * (congestion / 100))
