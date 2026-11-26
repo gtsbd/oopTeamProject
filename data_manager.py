@@ -1,3 +1,4 @@
+import os
 import requests
 import random
 from models.library import Library
@@ -6,8 +7,11 @@ from models.book import Book
 class SystemManager:
     def __init__(self):
         self.libraries = []
-        # 발급받은 실제 인증키 적용
-        self.api_key = "6a6b554f7277687232357741677367"
+        self.api_key = os.getenv("SEOUL_API_KEY")
+
+        if not self.api_key:
+            raise ValueError("SEOUL_API_KEY가 설정되지 않았습니다.")
+
         self._load_real_data_from_api()
 
     def _load_real_data_from_api(self):
