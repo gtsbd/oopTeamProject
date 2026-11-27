@@ -71,3 +71,36 @@ def test_empty_libraries():
 
     assert result["total"] == 0
     assert result["open_rate"] is None
+
+def test_data_quality():
+    result = AnalysisService().get_data_quality(
+        sample_libraries()
+    )
+
+    assert result["total"] == 3
+    assert result["complete_hours"] == 2
+    assert result["incomplete_hours"] == 1
+
+
+def test_weekly_statistics():
+    result = AnalysisService().get_weekly_statistics(
+        sample_libraries()
+    )
+
+    assert len(result) == 7 * 24
+
+
+def test_user_comparison():
+    results = AnalysisService().compare_user_types(
+        sample_libraries(), "월"
+    )
+
+    assert len(results) == 24
+
+    # 학생은 17시 방문
+    # 직장인은 18시 방문
+    assert results[17]["student"] == 2
+    assert results[17]["worker"] == 1
+
+    # 직장인은 24시 이후 방문하지 않음
+    assert results[23]["worker"] == 0

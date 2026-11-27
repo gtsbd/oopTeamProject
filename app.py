@@ -2,6 +2,7 @@
 import os
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 from dotenv import load_dotenv
 from services.analysis_service import AnalysisService
@@ -19,13 +20,14 @@ st.set_page_config(
 
 
 # 데이터 로딩
-@st.cache_resource
+@st.cache_resource(ttl=3600)
 def load_manager():
     api_key = os.getenv("SEOUL_API_KEY")
 
     repository = SeoulAPIRepository(
         api_key=api_key,
-        limit=100
+        limit=None,
+        page_size = 1000
     )
 
     return SystemManager(repository)
@@ -83,6 +85,71 @@ with tab1:
         "도서 보유 정보, 좌석 수, 인기도 및 "
         "혼잡도는 실제 데이터가 아닌 시뮬레이션입니다."
     )
+
+    st.subheader("운영시간 데이터 품질")
+
+    quality = AnalysisService().get_data_quality(
+        libraries
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "평일 운영시간 확인",
+        quality["weekday_known"]
+    )
+
+    col2.metric(
+        "주말 운영시간 확인",
+        quality["weekend_known"]
+    )
+
+    col3.metric(
+        "운영시간 일부 또는 전체 미확인",
+        quality["incomplete_hours"]
+    )
+
+    st.caption(
+        "운영시간 확인은 시간 범위 파싱 여부를 "
+        "기준으로 하며 모든 휴관 규칙의 "
+        "해석 성공을 의미하지 않습니다."
+    )
+
+    st.subheader("서울시 도서관 위치 분포")
+
+    if libraries:
+        map_data = pd.DataFrame([
+            {
+                "name": library.name,
+                "lat": library.location.lat,
+                "lon": library.location.lon,
+                "district": library.district
+            }
+            for library in libraries
+        ])
+
+        st.map(
+            map_data,
+            latitude="lat",
+            longitude="lon",
+            zoom=10
+        )
+
+        district_counts = (
+            map_data.groupby("district")
+            .size()
+            .sort_values(ascending=False)
+            .rename("도서관 수")
+        )
+
+        st.subheader("자치구별 도서관 분포")
+
+        st.bar_chart(district_counts)
+
+    else:
+        st.warning("지도에 표시할 데이터가 없습니다.")
+
+
 
 
 # 아래부터 기존 with tab2: 코드 유지
@@ -201,6 +268,92 @@ with tab2:
         "공휴일 및 복잡한 정기 휴관 규칙은 "
         "아직 완전히 반영되지 않았습니다."
     )
+
+    st.subheader("요일·시간대별 도서관 운영률")
+
+    weekly = analysis.get_weekly_statistics(
+        libraries
+    )
+
+    weekly_df = pd.DataFrame(weekly)
+
+    heatmap = (
+        alt.Chart(weekly_df)
+        .mark_rect()
+        .encode(
+            x=alt.X(
+                "hour:O",
+                title="시간"
+            ),
+            y=alt.Y(
+                "day:O",
+                sort=[
+                    "월", "화", "수", "목",
+                    "금", "토", "일"
+                ],
+                title="요일"
+            ),
+            color=alt.Color(
+                "open_rate:Q",
+                scale=alt.Scale(
+                    scheme="redyellowgreen",
+                    domain=[0, 100]
+                ),
+                title="운영률(%)"
+            ),
+            tooltip=[
+                alt.Tooltip("day:N", title="요일"),
+                alt.Tooltip("hour:O", title="시간"),
+                alt.Tooltip("open:Q", title="이용 가능"),
+                alt.Tooltip("closed:Q", title="이용 불가"),
+                alt.Tooltip("unknown:Q", title="판단 불가"),
+                alt.Tooltip(
+                    "open_rate:Q",
+                    title="운영률(%)",
+                    format=".1f"
+                )
+            ]
+        )
+        .properties(height=250)
+    )
+
+    st.altair_chart(
+        heatmap,
+        use_container_width=True
+    )
+
+    st.caption(
+        "운영률은 판단 가능한 도서관을 기준으로 "
+        "계산합니다. 판단 가능한 도서관이 없는 "
+        "시간대의 운영률은 표시하지 않습니다."
+    )
+
+    st.subheader("학생·직장인 이용 가능성 비교")
+
+    comparison = analysis.compare_user_types(
+        libraries,
+        selected_day
+    )
+
+    comparison_df = pd.DataFrame(comparison)
+
+    st.line_chart(
+        comparison_df.set_index("hour")[
+            ["student", "worker"]
+        ].rename(columns={
+            "student": "학생",
+            "worker": "직장인"
+        })
+    )
+
+    st.caption(
+        "학생은 기준 시각에 방문하고, "
+        "직장인은 1시간 후 방문한다는 "
+        "가정에 따른 시뮬레이션입니다. "
+        "거리 및 도서 보유 조건은 적용하지 않습니다."
+    )
+
+
 
 with tab3:
     st.header("🔍 내 조건에 맞는 도서관 찾기")
