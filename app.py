@@ -10,6 +10,11 @@ from models.user import OfficeWorker, Student
 from data_manager import SystemManager
 from repositories.seoul_api import SeoulAPIRepository
 from services.recommendation_service import RecommendationService
+from models.location import Location
+
+from services.spatial_analysis_service import (
+    SpatialAnalysisService
+)
 
 load_dotenv()
 
@@ -355,87 +360,380 @@ with tab2:
 
 
 
+
 with tab3:
-    st.header("🔍 내 조건에 맞는 도서관 찾기")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1: user_type = st.radio("사용자 유형", ["직장인", "학생"])
-    with col2: user_time = st.number_input("퇴근/하교 시간", 0, 23, 18)
-    with col3: search_book = st.selectbox("찾고 싶은 책", ["이기적 유전자", "사피엔스", "클린 코드", "코스모스", "총균쇠"])
-    
-    st.markdown("---")
-    st.subheader("📍 출발 위치 설정")
-    
-    # 위치 선택 UI 추가
-    location_choice = st.radio(
-        "어디서 출발하시나요?", 
-        ["광운대학교 (기본)", "강남역", "직접 입력(위/경도)"], 
-        horizontal=True
+    st.header("개인 맞춤 도서관 추천")
+
+    st.caption(
+        "요일, 방문 시간, 출발 위치, 검색 반경을 "
+        "기반으로 도서관을 분석합니다."
     )
-    
-    # 선택에 따라 my_lat, my_lon 변수의 값을 동적으로 변경
-    if location_choice == "광운대학교 (기본)":
-        my_lat, my_lon = 37.6194, 127.0583
-    elif location_choice == "강남역":
-        my_lat, my_lon = 37.4980, 127.0276
-    else:
-        # 직접 입력할 수 있는 칸 생성
-        loc_col1, loc_col2 = st.columns(2)
-        with loc_col1: my_lat = st.number_input("위도(Latitude)", value=37.5665, format="%.4f")
-        with loc_col2: my_lon = st.number_input("경도(Longitude)", value=126.9780, format="%.4f")
-        
-    if st.button("도서관 검색 알고리즘 실행", type="primary"):
-        st.markdown("---")
-        
-        # 1. UI에서 동적으로 설정된 my_lat, my_lon을 User 객체에 주입!
-        if user_type == "직장인":
-            user = OfficeWorker(my_lat, my_lon, int(user_time))
-        else:
-            user = Student(my_lat, my_lon, int(user_time))
-            
-        avail_time = user.get_available_time()
-        st.write(f"💡 {user_type} 객체 연산: {location_choice}에서 출발 시 도착 가능 시간은 **{avail_time}시**입니다.")
-        
-        # 2. 추천 서비스 호출 (비즈니스 로직 분리)
-        service = RecommendationService()
-        recommendation = service.recommend_libraries(
-            user,
-            libraries,
-            search_book,
-            day=recommend_day
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        user_type = st.radio(
+            "사용자 유형",
+            ["학생", "직장인"],
+            key="recommend_user_type"
         )
-        
-        total_count = recommendation["total_count"]
-        results = recommendation["top_results"]
-        
-        if total_count > 0:
-            st.success(f"총 {total_count}개의 도서관을 찾았습니다!")
-            
-            for item in results:
-                lib = item["library"]
-                dist = item["distance"]
-                close_t = item["close_time"]
-                # 도서관 객체 스스로 혼잡도를 계산하도록 메시지 전달
-                congestion = lib.get_congestion_rate(
-                    avail_time, recommend_day
-                )
 
-                crowded = lib.is_crowded(
-                    avail_time, recommend_day
-                )  
-
-                status_icon = "🔴 혼잡 (자리 부족 우려)" if lib.is_crowded(avail_time) else "🟢 여유"
-                
-                st.markdown(f"### {lib.name}")
-                st.write(f"📍 거리: {dist:.1f}km | 🕒 마감: {close_t}시 | {status_icon}")
-                
-                # Streamlit 프로그레스 바를 이용한 혼잡도 시각화
-                st.progress(congestion / 100, text=f"예상 좌석 사용률: {congestion:.1f}% ({current_users}/{lib.max_seats}석)")
-                st.write("---")
-        else:
-            st.error("조건에 완벽하게 일치하는 도서관이 없습니다.")
+    with col2:
         recommend_day = st.selectbox(
             "도서관 방문 요일",
             ["월", "화", "수", "목", "금", "토", "일"],
             key="recommend_day"
-        )    
+        )
+
+    with col3:
+        user_time = st.number_input(
+            "퇴근 / 하교 시간",
+            min_value=0,
+            max_value=23,
+            value=18,
+            step=1,
+            key="recommend_time"
+        )
+
+    st.subheader("검색 조건")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        search_book = st.selectbox(
+            "희망 도서 (모의 데이터)",
+            [
+                "도서 조건 없음",
+                "이기적 유전자",
+                "사피엔스",
+                "클린 코드",
+                "코스모스",
+                "총균쇠"
+            ]
+        )
+
+    with col2:
+        radius = st.selectbox(
+            "검색 반경 (km)",
+            [1, 3, 5, 10],
+            index=1
+        )
+
+    book_title = (
+        None
+        if search_book == "도서 조건 없음"
+        else search_book
+    )
+
+    st.subheader("출발 위치 설정")
+
+    location_choice = st.radio(
+        "어디서 출발하시나요?",
+        [
+            "광운대학교",
+            "강남역",
+            "직접 입력"
+        ],
+        horizontal=True
+    )
+
+    if location_choice == "광운대학교":
+        my_lat, my_lon = 37.6194, 127.0583
+
+    elif location_choice == "강남역":
+        my_lat, my_lon = 37.4980, 127.0276
+
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            my_lat = st.number_input(
+                "위도",
+                min_value=-90.0,
+                max_value=90.0,
+                value=37.5665,
+                format="%.4f"
+            )
+
+        with col2:
+            my_lon = st.number_input(
+                "경도",
+                min_value=-180.0,
+                max_value=180.0,
+                value=126.9780,
+                format="%.4f"
+            )
+
+    if st.button(
+        "도서관 검색 알고리즘 실행",
+        type="primary",
+        key="recommend_search"
+    ):
+        # 1. 사용자 객체 생성
+        if user_type == "직장인":
+            user = OfficeWorker(
+                my_lat, my_lon, int(user_time)
+            )
+        else:
+            user = Student(
+                my_lat, my_lon, int(user_time)
+            )
+
+        avail_time = user.get_available_time()
+
+        if avail_time >= 24:
+            st.warning(
+                "도착 예정 시간이 자정을 넘어 "
+                "당일 추천이 불가능합니다."
+            )
+
+        else:
+            origin = Location(my_lat, my_lon)
+
+            spatial = SpatialAnalysisService()
+            service = RecommendationService()
+
+            st.divider()
+
+            st.info(
+                f"{user_type} | "
+                f"{recommend_day}요일 | "
+                f"도착 예정 {avail_time:02.0f}:00 | "
+                f"검색 반경 {radius}km"
+            )
+
+            # 2. 공간적 접근성 분석
+            stats = spatial.get_radius_statistics(
+                libraries,
+                origin,
+                recommend_day,
+                avail_time,
+                radii=(1, 3, 5, 10)
+            )
+
+            stats_df = pd.DataFrame(stats)
+
+            nearby = spatial.get_nearby_libraries(
+                libraries,
+                origin,
+                radius
+            )
+
+            selected_stats = next(
+                row for row in stats
+                if row["radius"] == radius
+            )
+
+            st.subheader("반경 내 접근성 분석")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            col1.metric(
+                "반경 내 도서관",
+                selected_stats["total"]
+            )
+
+            col2.metric(
+                "이용 가능",
+                selected_stats["open"]
+            )
+
+            col3.metric(
+                "이용 불가",
+                selected_stats["closed"]
+            )
+
+            col4.metric(
+                "판단 불가",
+                selected_stats["unknown"]
+            )
+
+            if selected_stats["total"] == 0:
+                st.warning(
+                    "수집된 데이터에서 해당 반경 내 "
+                    "도서관을 찾을 수 없습니다."
+                )
+
+            elif selected_stats["open"] == 0:
+                st.warning(
+                    "현재 조건에서 이용 가능한 것으로 "
+                    "판단된 도서관이 없습니다."
+                )
+
+            st.bar_chart(
+                stats_df.set_index("radius")[
+                    ["open", "closed", "unknown"]
+                ].rename(columns={
+                    "open": "이용 가능",
+                    "closed": "이용 불가",
+                    "unknown": "판단 불가"
+                })
+            )
+
+            st.caption(
+                "각 반경의 집계값은 누적 값입니다. "
+                "도서 보유 조건은 적용하지 않았습니다."
+            )
+
+            # 3. 운영 상태별 지도 데이터 생성
+            colors = {
+                "open": "#22C55E",
+                "closed": "#EF4444",
+                "unknown": "#94A3B8"
+            }
+
+            map_rows = [{
+                "name": "출발 위치",
+                "lat": my_lat,
+                "lon": my_lon,
+                "color": "#2563EB",
+                "size": 100
+            }]
+
+            for item in nearby:
+                lib = item["library"]
+
+                status = lib.get_status(
+                    avail_time, recommend_day
+                )
+
+                map_rows.append({
+                    "name": lib.name,
+                    "lat": lib.location.lat,
+                    "lon": lib.location.lon,
+                    "color": colors[status],
+                    "size": 55
+                })
+
+            st.subheader("도서관 운영 상태 지도")
+
+            st.map(
+                pd.DataFrame(map_rows),
+                latitude="lat",
+                longitude="lon",
+                color="color",
+                size="size"
+            )
+
+            st.caption(
+                "🔵 출발 위치 | "
+                "🟢 이용 가능 | "
+                "🔴 이용 불가 | "
+                "⚪ 판단 불가"
+            )
+
+            # 4. 맞춤 추천 서비스 호출
+            recommendation = service.recommend_libraries(
+                user,
+                libraries,
+                book_title,
+                day=recommend_day,
+                radius_km=radius
+            )
+
+            total_count = recommendation["total_count"]
+            results = recommendation["top_results"]
+
+            st.divider()
+            st.subheader("맞춤 도서관 추천 결과")
+
+            if total_count == 0:
+                st.warning(
+                    "현재 검색 조건을 만족하는 "
+                    "도서관이 없습니다."
+                )
+
+            else:
+                st.success(
+                    f"조건을 만족하는 도서관 "
+                    f"{total_count}개 중 상위 "
+                    f"{len(results)}개를 추천합니다."
+                )
+
+                recommendation_map = [{
+                    "name": "출발 위치",
+                    "lat": my_lat,
+                    "lon": my_lon,
+                    "color": "#2563EB",
+                    "size": 100
+                }]
+
+                for rank, item in enumerate(
+                    results, start=1
+                ):
+                    lib = item["library"]
+                    dist = item["distance"]
+                    close_t = item["close_time"]
+
+                    close_minutes = round(close_t * 60)
+
+                    close_label = (
+                        f"{close_minutes // 60:02d}:"
+                        f"{close_minutes % 60:02d}"
+                    )
+
+                    congestion = lib.get_congestion_rate(
+                        avail_time, recommend_day
+                    )
+
+                    current_users = int(
+                        lib.max_seats * congestion / 100
+                    )
+
+                    st.markdown(
+                        f"### {rank}. {lib.name}"
+                    )
+
+                    st.write(
+                        f"직선거리: {dist:.2f}km | "
+                        f"마감시간: {close_label}"
+                    )
+
+                    st.caption(
+                        f"{lib.district} | {lib.address}"
+                    )
+
+                    st.progress(
+                        congestion / 100,
+                        text=(
+                            f"모의 좌석 사용률: "
+                            f"{congestion:.1f}% "
+                            f"({current_users}/"
+                            f"{lib.max_seats}석)"
+                        )
+                    )
+
+                    recommendation_map.append({
+                        "name": lib.name,
+                        "lat": lib.location.lat,
+                        "lon": lib.location.lon,
+                        "color": "#22C55E",
+                        "size": 75
+                    })
+
+                    st.divider()
+
+                st.subheader("추천 도서관 위치")
+
+                st.map(
+                    pd.DataFrame(recommendation_map),
+                    latitude="lat",
+                    longitude="lon",
+                    color="color",
+                    size="size"
+                )
+
+            st.caption(
+                "거리는 Haversine 기반 지표면 거리이며 "
+                "실제 도보 또는 대중교통 이동 거리가 아닙니다."
+            )
+
+            st.caption(
+                "직장인 이동시간 1시간, 도서 보유 여부, "
+                "좌석 수 및 혼잡도는 시뮬레이션 가정입니다."
+            )
+
+            st.caption(
+                "공휴일 및 복잡한 휴관 규칙은 "
+                "완전히 반영되지 않았습니다."
+            )

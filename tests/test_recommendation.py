@@ -115,3 +115,47 @@ def test_after_midnight_recommendation():
 
     assert result["total_count"] == 0
 
+def test_recommendation_without_book():
+    library = Library(
+        "테스트 도서관",
+        37.5, 127.0,
+        22
+    )
+
+    user = Student(37.5, 127.0, 18)
+
+    result = RecommendationService().recommend_libraries(
+        user,
+        [library],
+        book_title=None
+    )
+
+    assert result["total_count"] == 1
+
+
+def test_recommendation_radius():
+    near = Library(
+        "가까운 도서관",
+        37.505, 127.0, 22
+    )
+
+    far = Library(
+        "먼 도서관",
+        37.6, 127.0, 22
+    )
+
+    user = Student(37.5, 127.0, 18)
+
+    result = RecommendationService().recommend_libraries(
+        user,
+        [near, far],
+        book_title=None,
+        radius_km=1
+    )
+
+    assert result["total_count"] == 1
+
+    assert result["top_results"][0]["library"].name == (
+        "가까운 도서관"
+    )
+
