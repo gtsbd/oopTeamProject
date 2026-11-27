@@ -48,3 +48,14 @@ def test_minute_precision():
     assert hours.is_open("월", 9.5)
     assert hours.is_open("월", 18.25)
     assert not hours.is_open("월", 18.5)
+    
+def test_period_separated_hours():
+    hours = OperatingHours.from_text(
+        "평일 : 09:00~21:00. 주말 : 09:00~17:00"
+    )
+
+    assert hours.get_close_time("월") == 21
+    assert hours.get_close_time("토") == 17
+
+    assert hours.is_open("월", 20)
+    assert not hours.is_open("토", 18)

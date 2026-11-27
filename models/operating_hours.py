@@ -82,7 +82,7 @@ class OperatingHours:
         weekday = None
         weekend = None
 
-        for part in re.split(r"[,;\n]", hours_text):
+        for part in re.split(r"[,;.\n]", hours_text):
             part = part.strip()
 
             for label in ("평일", "주말"):
