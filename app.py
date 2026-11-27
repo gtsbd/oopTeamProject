@@ -4,6 +4,8 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
+from views.chart_renderer import ChartRenderer
+from views.map_renderer import MapRenderer
 from dotenv import load_dotenv
 from services.analysis_service import AnalysisService
 from models.user import OfficeWorker, Student
@@ -560,67 +562,27 @@ with tab3:
                     "판단된 도서관이 없습니다."
                 )
 
-            st.bar_chart(
-                stats_df.set_index("radius")[
-                    ["open", "closed", "unknown"]
-                ].rename(columns={
-                    "open": "이용 가능",
-                    "closed": "이용 불가",
-                    "unknown": "판단 불가"
-                })
-            )
+                ChartRenderer().render_radius_chart(stats)
 
             st.caption(
                 "각 반경의 집계값은 누적 값입니다. "
                 "도서 보유 조건은 적용하지 않았습니다."
             )
 
-            # 3. 운영 상태별 지도 데이터 생성
-            colors = {
-                "open": "#22C55E",
-                "closed": "#EF4444",
-                "unknown": "#94A3B8"
-            }
-
-            map_rows = [{
-                "name": "출발 위치",
-                "lat": my_lat,
-                "lon": my_lon,
-                "color": "#2563EB",
-                "size": 100
-            }]
-
-            for item in nearby:
-                lib = item["library"]
-
-                status = lib.get_status(
-                    avail_time, recommend_day
-                )
-
-                map_rows.append({
-                    "name": lib.name,
-                    "lat": lib.location.lat,
-                    "lon": lib.location.lon,
-                    "color": colors[status],
-                    "size": 55
-                })
-
+            
+            # 3. 운영 상태별 지도 시각화
             st.subheader("도서관 운영 상태 지도")
 
-            st.map(
-                pd.DataFrame(map_rows),
-                latitude="lat",
-                longitude="lon",
-                color="color",
-                size="size"
+            renderer = MapRenderer()
+
+            renderer.render_accessibility(
+                origin=origin,
+                nearby=nearby,
+                day=recommend_day,
+                time=avail_time,
+                radius_km=radius
             )
 
-            st.caption(
-                "🔵 출발 위치 | "
-                "🟢 이용 가능 | "
-                "🔴 이용 불가 | "
-                "⚪ 판단 불가"
-            )
 
             # 4. 맞춤 추천 서비스 호출
             recommendation = service.recommend_libraries(
