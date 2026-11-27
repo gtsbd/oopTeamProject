@@ -77,3 +77,41 @@ class TestRecommendationService(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_recommendation_respects_closed_day():
+    from models.operating_hours import OperatingHours
+
+    library = Library(
+        "테스트 도서관", 37.5, 127.0,
+        operating_hours=OperatingHours.from_text(
+            "09:00~22:00",
+            "매주 화요일"
+        )
+    )
+
+    library.add_book(Book("클린 코드", "test"))
+
+    user = Student(37.5, 127.0, 18)
+    service = RecommendationService()
+
+    monday = service.recommend_libraries(
+        user, [library], "클린 코드", day="월"
+    )
+
+    tuesday = service.recommend_libraries(
+        user, [library], "클린 코드", day="화"
+    )
+
+    assert monday["total_count"] == 1
+    assert tuesday["total_count"] == 0
+
+
+def test_after_midnight_recommendation():
+    worker = OfficeWorker(37.5, 127.0, 23)
+
+    result = RecommendationService().recommend_libraries(
+        worker, [], "클린 코드"
+    )
+
+    assert result["total_count"] == 0
+

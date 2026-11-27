@@ -1,39 +1,206 @@
+
+import os
 import streamlit as st
+import pandas as pd
+
+from dotenv import load_dotenv
+from services.analysis_service import AnalysisService
 from models.user import OfficeWorker, Student
 from data_manager import SystemManager
+from repositories.seoul_api import SeoulAPIRepository
 from services.recommendation_service import RecommendationService
 
-st.set_page_config(page_title="서울시 도서관 사각지대 시뮬레이터", layout="wide")
+load_dotenv()
 
-# 데이터 한 번만 로드하기 (캐싱)
+st.set_page_config(
+    page_title="서울시 도서관 사각지대 시뮬레이터",
+    layout="wide"
+)
+
+
+# 데이터 로딩
 @st.cache_resource
 def load_manager():
-    return SystemManager()
+    api_key = os.getenv("SEOUL_API_KEY")
 
-manager = load_manager()
+    repository = SeoulAPIRepository(
+        api_key=api_key,
+        limit=100
+    )
+
+    return SystemManager(repository)
+
+
+try:
+    manager = load_manager()
+
+except (ValueError, RuntimeError) as error:
+    st.error(str(error))
+    st.stop()
+
+
 libraries = manager.get_libraries()
 
+
+# 대시보드 제목
 st.title("📚 서울시 도서관 시공간 사각지대 및 맞춤 추천")
 st.markdown("객체지향 프로그래밍(OOP)을 활용한 정책 시뮬레이터")
 
-# 기획서의 흐름대로 탭 생성
-tab1, tab2, tab3 = st.tabs(["1. 데이터 현황 파악", "2. 시간적 사각지대 시뮬레이션", "3. 내 맞춤 도서관 찾기 (다형성)"])
 
+# 탭 생성
+tab1, tab2, tab3 = st.tabs([
+    "1. 데이터 현황 파악",
+    "2. 시간적 사각지대 시뮬레이션",
+    "3. 내 맞춤 도서관 찾기"
+])
+
+
+# 첫 번째 탭
 with tab1:
-    st.header("📊 서울시 공공도서관 데이터 로드 완료")
-    st.success(f"실시간 API를 통해 **{len(libraries)}개**의 도서관 객체와 더미 도서 데이터가 성공적으로 매핑되었습니다.")
-    st.write("단순히 도서관 개수가 많다고 해서 모든 시민이 혜택을 누릴 수 있는 것은 아닙니다. 옆 탭에서 '시간'의 개념을 더해 진짜 사각지대를 찾아보세요.")
+    st.header("서울시 공공도서관 데이터 현황")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("API 수신 데이터", manager.raw_count)
+    col2.metric("유효 데이터", len(libraries))
+    col3.metric("제외된 데이터", manager.invalid_count)
+
+    if not libraries:
+        st.warning("유효한 도서관 데이터가 없습니다.")
+
+    elif manager.invalid_count:
+        st.warning("일부 데이터가 검증 과정에서 제외됐습니다.")
+
+    else:
+        st.success("도서관 데이터 로드 완료")
+
+    st.caption(
+        "데이터 출처: 서울 열린데이터광장 "
+        "SeoulPublicLibraryInfo Open API (JSON)"
+    )
+
+    st.info(
+        "도서 보유 정보, 좌석 수, 인기도 및 "
+        "혼잡도는 실제 데이터가 아닌 시뮬레이션입니다."
+    )
+
+
+# 아래부터 기존 with tab2: 코드 유지
+# 기존 with tab3: 코드도 유지
+
+
 
 with tab2:
-    st.header("⏳ 시간에 따른 도서관 활성화 시뮬레이션")
-    test_time = st.slider("시간을 조절해보세요", 9, 23, 14)
-    
-    open_count = sum(1 for lib in libraries if lib.is_open(test_time))
-    closed_count = len(libraries) - open_count
-    
-    st.metric(label=f"{test_time}시 기준 운영 중인 도서관", value=f"{open_count}개", delta=f"-{closed_count}개 (운영 종료)")
-    if test_time >= 18:
-        st.warning("퇴근 시간 이후 많은 도서관 객체의 is_open() 상태가 False로 변경되며 심각한 사각지대가 발생합니다.")
+    st.header("시간적 사각지대 분석")
+
+    analysis = AnalysisService()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        selected_day = st.selectbox(
+            "방문 요일",
+            ["월", "화", "수", "목", "금", "토", "일"],
+            index=0
+        )
+
+    with col2:
+        selected_time = st.slider(
+            "방문 시간",
+            min_value=0.0,
+            max_value=23.5,
+            value=18.0,
+            step=0.5
+        )
+
+    summary = analysis.get_summary(
+        libraries,
+        selected_day,
+        selected_time
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("이용 가능", summary["open"])
+    col2.metric("이용 불가", summary["closed"])
+    col3.metric("판단 불가", summary["unknown"])
+
+    rate = summary["open_rate"]
+
+    col4.metric(
+        "운영률",
+        f"{rate:.1f}%" if rate is not None else "N/A"
+    )
+
+    st.subheader("시간대별 도서관 운영 현황")
+
+    hourly = analysis.get_hourly_statistics(
+        libraries,
+        selected_day
+    )
+
+    hourly_df = pd.DataFrame(hourly)
+
+    st.line_chart(
+        hourly_df.set_index("hour")[
+            ["open", "closed", "unknown"]
+        ].rename(columns={
+            "open": "이용 가능",
+            "closed": "이용 불가",
+            "unknown": "판단 불가"
+        })
+    )
+
+    st.subheader("시간대별 도서관 운영률")
+
+    st.line_chart(
+        hourly_df.set_index("hour")[
+            ["open_rate"]
+        ].rename(columns={
+            "open_rate": "운영률(%)"
+        })
+    )
+
+    st.subheader("자치구별 운영 현황")
+
+    districts = analysis.get_district_statistics(
+        libraries,
+        selected_day,
+        selected_time
+    )
+
+    if districts:
+        district_df = pd.DataFrame(districts)
+
+        st.bar_chart(
+            district_df.set_index("district")[
+                ["open", "closed", "unknown"]
+            ].rename(columns={
+                "open": "이용 가능",
+                "closed": "이용 불가",
+                "unknown": "판단 불가"
+            })
+        )
+
+        st.dataframe(
+            district_df,
+            hide_index=True
+        )
+
+    st.caption(
+        "운영률은 운영 여부를 판단할 수 있는 "
+        "도서관을 기준으로 계산합니다."
+    )
+
+    st.caption(
+        "현재 수집된 API 표본을 기준으로 분석하며, "
+        "서울 전체 도서관에 대한 전수조사가 아닙니다."
+    )
+
+    st.warning(
+        "공휴일 및 복잡한 정기 휴관 규칙은 "
+        "아직 완전히 반영되지 않았습니다."
+    )
 
 with tab3:
     st.header("🔍 내 조건에 맞는 도서관 찾기")
@@ -78,7 +245,12 @@ with tab3:
         
         # 2. 추천 서비스 호출 (비즈니스 로직 분리)
         service = RecommendationService()
-        recommendation = service.recommend_libraries(user, libraries, search_book)
+        recommendation = service.recommend_libraries(
+            user,
+            libraries,
+            search_book,
+            day=recommend_day
+        )
         
         total_count = recommendation["total_count"]
         results = recommendation["top_results"]
@@ -91,9 +263,14 @@ with tab3:
                 dist = item["distance"]
                 close_t = item["close_time"]
                 # 도서관 객체 스스로 혼잡도를 계산하도록 메시지 전달
-                congestion = lib.get_congestion_rate(avail_time)
-                current_users = int(lib.max_seats * (congestion / 100))
-                
+                congestion = lib.get_congestion_rate(
+                    avail_time, recommend_day
+                )
+
+                crowded = lib.is_crowded(
+                    avail_time, recommend_day
+                )  
+
                 status_icon = "🔴 혼잡 (자리 부족 우려)" if lib.is_crowded(avail_time) else "🟢 여유"
                 
                 st.markdown(f"### {lib.name}")
@@ -104,3 +281,8 @@ with tab3:
                 st.write("---")
         else:
             st.error("조건에 완벽하게 일치하는 도서관이 없습니다.")
+        recommend_day = st.selectbox(
+            "도서관 방문 요일",
+            ["월", "화", "수", "목", "금", "토", "일"],
+            key="recommend_day"
+        )    
